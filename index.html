@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Tour Analytics Dashboard</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/echarts/5.4.3/echarts.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+    <style>
+        .dashboard {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .chart-container {
+            height: 500px;
+            margin-bottom: 40px;
+        }
+    </style>
+</head>
+<body>
+    <div class="dashboard">
+        <div id="royaltiesChart" class="chart-container"></div>
+        <div id="downloadsChart" class="chart-container"></div>
+    </div>
+
+    <script>
+        function readLocalCSV(filePath) {
+            return new Promise((resolve, reject) => {
+                Papa.parse(filePath, {
+                    download: true,
+                    header: true,
+                    complete: (results) => {
+                        resolve(results.data);
+                    },
+                    error: (error) => {
+                        reject(error);
+                    }
+                });
+            });
+        }
+
+        function transformData(royaltiesData, downloadsData) {
+            const dates = Object.keys(royaltiesData[0])
+                .filter(key => key !== 'Tour Title')
+                .map(dateStr => {
+                    const [month, year] = dateStr.split(' ');
+                    return {
+                        original: dateStr,
+                        date: new Date(year, getMonthNumber(month))
+                    };
+                })
+                .sort((a, b) => b.date - a.date)
+                .map(item => item.original);
+
+            function getMonthNumber(month) {
+                const months = {
+                    'January': 0, 'February': 1, 'March': 2, 'April': 3,
+                    'May': 4, 'June': 5, 'July': 6, 'August': 7,
+                    'September': 8, 'October': 9, 'November': 10, 'December': 11
+                };
+                return months[month];
+            }
+
+            const tours = royaltiesData.map(row => row['Tour Title']);
+            const royalties = {};
+            const downloads = {};
+
+            royaltiesData.forEach(row => {
+                const tourTitle = row['Tour Title'];
+                royalties[tourTitle] = dates.map(date => 
+                    parseFloat(row[date] || '0')
+                );
+            });
+
+            downloadsData.forEach(row => {
+                const tourTitle = row['Tour Title'];
+                downloads[tourTitle] = dates.map(date => 
+                    parseInt(row[date] || '0', 10)
+                );
+            });
+
+            // Calculate totals
+            const totalRoyalties = dates.map((date, index) => {
+                return Object.values(royalties).reduce((sum, tourValues) => 
+                    sum + (tourValues[index] || 0), 0);
+            });
+
+            const totalDownloads = dates.map((date, index) => {
+                return Object.values(downloads).reduce((sum, tourValues) => 
+                    sum + (tourValues[index] || 0), 0);
+            });
+
+            royalties['Total'] = totalRoyalties;
+            downloads['Total'] = totalDownloads;
+
+            return {
+                dates,
+                tours: ['Total', ...tours],
+                royalties,
+                downloads
+            };
+        }
+
+        function createChartOption(title, data, yAxisFormatter) {
+            function getTopPerformers(data, tours) {
+                return tours
+                    .filter(tour => tour !== 'Total')
+                    .map(tour => {
+                        const values = data[tour];
+                        const last3Months = values.slice(0, 3);
+                        const average = last3Months.reduce((sum, val) => sum + val, 0) / last3Months.length;
+                        return {
+                            tour,
+                            value: average
+                        };
+                    })
+                    .sort((a, b) => b.value - a.value)
+                    .slice(0, 10)
+                    .map(item => item.tour);
+            }
+
+            const topTours = getTopPerformers(data, tourData.tours);
+
+            return {
+                title: {
+                    text: title,
+                    left: 'center',
+                    top: 0
+                },
+                tooltip: {
+                    trigger: 'axis',
+                    formatter: function(params) {
+                        let result = `<div style="font-weight: bold; margin-bottom: 3px;">${params[0].axisValueLabel}</div>`;
+                        let total = 0;
+                        
+                        params
+                            .sort((a, b) => b.value - a.value)
+                            .forEach(param => {
+                                if (param.seriesName !== 'Total') {
+                                    total += param.value;
+                                    const color = param.color;
+                                    const value = yAxisFormatter(param.value);
+                                    result += `
+                                        <div style="display: flex; align-items: center; margin: 3px 0;">
+                                            <span style="display: inline-block; width: 10px; height: 10px; background-color: ${color}; margin-right: 5px;"></span>
+                                            <span style="flex-grow: 1;">${param.seriesName}</span>
+                                            <span style="margin-left: 15px; font-weight: bold;">${value}</span>
+                                        </div>`;
+                                }
+                            });
+                        
+                        result += `<div style="margin-top: 5px; border-top: 1px solid #ccc; padding-top: 5px;">
+                            <b>Total: ${yAxisFormatter(total)}</b>
+                        </div>`;
+                        
+                        return result;
+                    },
+                    backgroundColor: 'rgba(255, 255, 255, 0.95)',
+                    borderColor: '#ccc',
+                    borderWidth: 1,
+                    padding: [10, 15],
+                    textStyle: {
+                        color: '#333'
+                    }
+                },
+                legend: {
+                    type: 'scroll',
+                    orient: 'vertical',
+                    right: 0,
+                    top: 50,
+                    bottom: 50,
+                    selectedMode: 'multiple',
+                    data: tourData.tours,
+                    selected: tourData.tours.reduce((acc, tour) => {
+                        if (tour === 'Total') {
+                            acc[tour] = false;
+                        } else {
+                            acc[tour] = topTours.includes(tour);
+                        }
+                        return acc;
+                    }, {}),
+                    textStyle: {
+                        fontSize: 12,
+                        overflow: 'truncate',
+                        width: 150
+                    }
+                },
+                grid: {
+                    right: 200,
+                    left: 50,
+                    top: 60,
+                    bottom: 60,
+                    containLabel: true
+                },
+                toolbox: {
+                    feature: {
+                        dataZoom: {
+                            yAxisIndex: 'none'
+                        },
+                        restore: {},
+                        saveAsImage: {}
+                    }
+                },
+                dataZoom: [
+                    {
+                        type: 'slider',
+                        show: true,
+                        start: 0,
+                        end: 100
+                    },
+                    {
+                        type: 'inside',
+                        start: 0,
+                        end: 100
+                    }
+                ],
+                xAxis: {
+                    type: 'category',
+                    data: tourData.dates,
+                    boundaryGap: false
+                },
+                yAxis: {
+                    type: 'value',
+                    axisLabel: {
+                        formatter: yAxisFormatter
+                    }
+                },
+                series: tourData.tours.map(tour => ({
+                    name: tour,
+                    type: 'line',
+                    smooth: true,
+                    stack: tour === 'Total' ? false : 'Total', // Don't stack the Total line
+                    data: data[tour],
+                    areaStyle: tour === 'Total' ? undefined : {
+                        opacity: 0.3
+                    },
+                    emphasis: {
+                        focus: 'series'
+                    },
+                    lineStyle: {
+                        width: tour === 'Total' ? 2.5 : (topTours.includes(tour) ? 2 : 1)
+                    },
+                    opacity: tour === 'Total' ? 1 : (topTours.includes(tour) ? 1 : 0.5)
+                }))
+            };
+        }
+
+        let royaltiesChart;
+        let downloadsChart;
+        let tourData;
+
+        async function initializeCharts() {
+            try {
+                const royaltiesData = await readLocalCSV('royalties-context-travel-13Nov2024.csv');
+                const downloadsData = await readLocalCSV('downloads-context-travel-13Nov2024.csv');
+                
+                tourData = transformData(royaltiesData, downloadsData);
+                
+                royaltiesChart = echarts.init(document.getElementById('royaltiesChart'));
+                downloadsChart = echarts.init(document.getElementById('downloadsChart'));
+
+                royaltiesChart.setOption(createChartOption(
+                    'Tour Royalties Over Time',
+                    tourData.royalties,
+                    value => '$' + value.toLocaleString()
+                ));
+
+                downloadsChart.setOption(createChartOption(
+                    'Tour Downloads Over Time',
+                    tourData.downloads,
+                    value => value.toLocaleString()
+                ));
+
+                window.addEventListener('resize', function() {
+                    royaltiesChart.resize();
+                    downloadsChart.resize();
+                });
+
+            } catch (error) {
+                console.error('Failed to initialize charts:', error);
+            }
+        }
+
+        document.addEventListener('DOMContentLoaded', initializeCharts);
+    </script>
+</body>
+</html>
